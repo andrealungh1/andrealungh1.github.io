@@ -1,0 +1,119 @@
+/* blog.css */
+
+/* ----------- Tweaks for blog-post readability ----------- */
+body {
+  font-size: 1.125rem;
+  line-height: 1.75;
+}
+
+.post-wrapper {
+  max-width: 900px;
+  margin: 4rem auto;
+  padding: 0 1.5rem;
+}
+
+.post-wrapper h1.post-title {
+  font-size: 3rem;
+  margin: 0 0 .65rem;
+  font-weight: 700;
+  line-height: 1.15;
+}
+
+.post-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .85rem;
+  font-size: .95rem;
+  color: var(--muted);
+  margin-bottom: 2.5rem;
+}
+
+.post-meta i {
+  margin-right: .25rem;
+}
+
+.post-content h2 {
+  font-size: 2.25rem;
+  margin: 3.25rem 0 1.25rem;
+  font-weight: 700;
+}
+
+.post-content h3 {
+  font-size: 1.55rem;
+  margin: 2.5rem 0 1rem;
+  font-weight: 600;
+}
+
+.post-content img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 2rem auto;
+  border-radius: .35rem;
+}
+
+:root {
+  --inline-code: #ff4d9e;
+}
+
+.post-content :not(pre) > code {
+  color: var(--inline-code);
+  padding: .15em .35em;
+  border-radius: .25rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .85em;
+}
+
+pre[class*="language-"],
+pre:not([class]) {
+  overflow-x: auto;
+  background: var(--bg-nav);
+  padding: 1.25rem 1.5rem;
+  border-radius: .5rem;
+  font-size: .95rem;
+  line-height: 1.55;
+}
+
+pre code {
+  color: inherit;
+  background: none;
+  padding: 0;
+}
+
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 1.75rem 0;
+  padding-left: 1rem;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.post-wrapper figure {
+  display: flex;
+  justify-content: center;
+  margin: 2rem 0;
+}
+
+code.hljs,
+pre code.hljs {
+  background: transparent !important;
+}
+
+.post-wrapper figure img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+@media (max-width:600px) {
+  body {
+    font-size:1rem;
+  }
+  .post-wrapper {
+    margin:2rem auto;
+    padding:0 1rem;
+  }
+  .post-wrapper h1.post-title {
+    font-size:2.4rem;
+  }
+}

