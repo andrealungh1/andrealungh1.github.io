@@ -232,28 +232,6 @@ nav.main-nav a:active {
   outline: none;
 }
 
-/* Mobile: leggermente più piccoli */
-@media (max-width: 600px) {
-  .pager-btn {
-    width: 48px;
-    height: 48px;
-    font-size: 1.2rem;
-  }
-}
-/* Nasconde del tutto il pulsante disabilitato */
-.pager-btn.disabled,
-.pager-btn[aria-disabled="true"] {
-  display: none;   /* lo toglie dal flusso ⇒ conta come se non esistesse */
-}
-/* Browser che supportano :has() */
-.pager:has(.pager-btn:only-child) {
-  justify-content: center;
-}
 
-/* Fallback per browser più vecchi */
-.pager-btn:only-child {
-  margin-left: auto;
-  margin-right: auto;
-}
 
 
